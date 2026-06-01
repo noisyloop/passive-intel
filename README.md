@@ -17,8 +17,6 @@ resolver. If you want offensive tooling, this isn't it — and that's the point.
   first, filterable by host / threat / tag. Loads on page open.
 - **Feodo C2 feed** — active botnet command-and-control IPs with malware family
   and country. Loads on page open.
-- **Quad9 quick check** — enter a domain or IP; is the host on a threat
-  blocklist? (NXDOMAIN = blocked.)
 
 ## Data sources
 

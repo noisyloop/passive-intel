@@ -37,7 +37,8 @@ function sevBadge(score, sev) {
   } else if (sev && SEV_COLOR[sev]) {
     [label, color] = [sev, SEV_COLOR[sev]];
   } else {
-    [label, color] = ['unscored', 'var(--fg-dim)'];
+    // No score and no severity word: render nothing rather than an "unscored" tag.
+    return '';
   }
   return `<span class="sev" style="color:${color};border-color:${color}">${label}</span>`;
 }
@@ -133,8 +134,11 @@ async function expandKev(el, v) {
 }
 
 function showCvss(d, base, score) {
+  const badge = typeof score === 'number'
+    ? sevBadge(score, null)
+    : '<span class="muted">n/a</span>';
   d.innerHTML =
-    base + `<div style="margin-top:4px"><span class="lbl">cvss: </span>${sevBadge(score, null)}</div>`;
+    base + `<div style="margin-top:4px"><span class="lbl">cvss: </span>${badge}</div>`;
 }
 
 async function loadKev() {
@@ -261,50 +265,6 @@ async function loadFeodo() {
   }
 }
 
-// ---- Quad9 quick check ------------------------------------------------------
-function normHost(v) {
-  v = v.trim();
-  try { if (/^https?:\/\//i.test(v)) return new URL(v).hostname; } catch (e) {}
-  return v.replace(/^\/+|\/+$/g, '').split('/')[0];
-}
-
-async function quad9Check() {
-  const raw = $('q-input').value.trim();
-  if (!raw) return;
-  const host = normHost(raw);
-  const out = $('q-out');
-  const btn = $('q-btn');
-  out.innerHTML = '<span class="muted">[ querying quad9… ]</span>';
-  btn.disabled = true;
-
-  try {
-    const r = await fetch(`/api/lookup?source=quad9&host=${encodeURIComponent(host)}`);
-    if (r.status === 400) {
-      out.innerHTML = '<div class="err">invalid target — domain or ip only</div>';
-    } else if (r.status === 429) {
-      out.innerHTML = '<div class="warn">rate limited — slow down</div>';
-    } else if (!r.ok) {
-      out.innerHTML = '<div class="err">error: lookup failed</div>';
-    } else {
-      const j = await r.json();
-      let html = '';
-      if (j.blocked) {
-        html += `<div><span class="lbl">verdict     </span><span class="bad">BLOCKED / nxdomain</span></div>`;
-        html += `<div class="note">// quad9 refuses to resolve — on threat blocklist or nonexistent</div>`;
-      } else if (Array.isArray(j.aRecords) && j.aRecords.length) {
-        html += `<div><span class="lbl">verdict     </span><span class="good">resolves (not blocked)</span></div>`;
-        html += `<div><span class="lbl">a records   </span><span>${esc(j.aRecords.join(', '))}</span></div>`;
-      } else {
-        html += `<div><span class="lbl">verdict     </span><span class="warn">no a record</span></div>`;
-      }
-      out.innerHTML = html;
-    }
-  } catch (e) {
-    out.innerHTML = '<div class="err">error: quad9 unreachable</div>';
-  }
-  btn.disabled = false;
-}
-
 // ---- Wire up ----------------------------------------------------------------
 function init() {
   setStatus();
@@ -318,9 +278,6 @@ function init() {
 
   renderFeodo();
   loadFeodo();
-
-  $('q-btn').addEventListener('click', quad9Check);
-  $('q-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') quad9Check(); });
 }
 
 if (document.readyState === 'loading') {

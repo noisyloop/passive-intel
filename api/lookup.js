@@ -1,10 +1,10 @@
-// GET /api/lookup?source=urlhaus&host=<domain|ip>
+// GET /api/lookup?source=quad9&host=<domain|ip>
 // GET /api/lookup?source=cvss&cve=<CVE-id>
 //
-// Why this exists: URLhaus and NVD do not send CORS headers, so the browser
-// can't call them directly. This relays the request server-side and returns
-// JSON. Quad9 (DNS block status) is called client-side because it *does* send
-// CORS — no need to proxy it.
+// Why this exists: these upstreams are relayed server-side so the browser never
+// talks to them directly. NVD sends no CORS headers; Quad9 is proxied so the
+// page's CSP can drop dns.quad9.net from connect-src and keep everything
+// same-origin.
 //
 // Security posture:
 //   - Upstream URLs are HARDCODED. User input only ever becomes a validated
@@ -33,28 +33,18 @@ function severityFromScore(score) {
   return 'low';
 }
 
-async function urlhausLookup(host) {
-  const r = await fetchWithTimeout('https://urlhaus-api.abuse.ch/v1/host/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `host=${encodeURIComponent(host)}`,
-  });
-  if (!r.ok) throw new Error('urlhaus ' + r.status);
+// Quad9 filtered DoH resolver. NXDOMAIN (Status 3) on a host that should exist
+// means Quad9 is refusing to resolve it — i.e. it's on a threat blocklist.
+async function quad9Lookup(host) {
+  const r = await fetchWithTimeout(
+    `https://dns.quad9.net/dns-query?name=${encodeURIComponent(host)}&type=A`,
+    { headers: { accept: 'application/dns-json' } }
+  );
+  if (!r.ok) throw new Error('quad9 ' + r.status);
   const j = await r.json();
-
-  if (j.query_status === 'no_results') {
-    return { host, status: 'clean', urls: 0, active: 0, tags: [] };
-  }
-  const urls = Array.isArray(j.urls) ? j.urls : [];
-  const active = urls.filter((u) => u.url_status === 'online').length;
-  const tags = [...new Set(urls.flatMap((u) => u.tags || []))].slice(0, 12);
-  return {
-    host,
-    status: j.query_status === 'no_results' ? 'clean' : 'listed',
-    urls: urls.length,
-    active,
-    tags,
-  };
+  const answers = Array.isArray(j.Answer) ? j.Answer : [];
+  const aRecords = answers.filter((a) => a.type === 1).map((a) => a.data);
+  return { host, blocked: j.Status === 3, aRecords };
 }
 
 async function cvssLookup(cve) {
@@ -82,11 +72,11 @@ module.exports = async function handler(req, res) {
   const source = url.searchParams.get('source');
 
   try {
-    if (source === 'urlhaus') {
+    if (source === 'quad9') {
       const host = validHost(url.searchParams.get('host'));
       if (!host) return send(res, 400, { error: 'invalid_host' });
-      const data = await urlhausLookup(host);
-      // URLhaus data shifts often; cache briefly.
+      const data = await quad9Lookup(host);
+      // DNS verdicts can shift; cache briefly.
       return send(res, 200, data, 'public, s-maxage=300, stale-while-revalidate=600');
     }
 
@@ -98,7 +88,7 @@ module.exports = async function handler(req, res) {
       return send(res, 200, data, 'public, s-maxage=86400, stale-while-revalidate=604800');
     }
 
-    return send(res, 400, { error: 'unknown_source', allowed: ['urlhaus', 'cvss'] });
+    return send(res, 400, { error: 'unknown_source', allowed: ['quad9', 'cvss'] });
   } catch (err) {
     return send(res, 502, { error: 'upstream_error', message: 'lookup failed' });
   }

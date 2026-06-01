@@ -62,6 +62,12 @@ No database. No auth. The only server code is two stateless relay functions.
   returning `429` + `Retry-After`. Best-effort on serverless (per-instance,
   resets on cold start) — fine for a portfolio deploy. See *Hardening* to make
   it distributed.
+- **No DOM XSS from feed data.** The feeds display attacker-influenced content
+  (malware URLs, tags, threat names, C2 IPs). The client never builds markup
+  from it — every dynamic value is written via `textContent`/DOM APIs, so it's
+  always inert text and can't be parsed as HTML. Malware URLs are shown as plain
+  text, never as clickable `<a href>` links. With the strict CSP below, that's
+  two independent layers against script injection.
 - **Same-origin only.** No `Access-Control-Allow-Origin` is set, so the API
   can't be reused as an open CORS proxy by anyone else.
 - **Strict CSP.** `default-src 'none'`; scripts/styles are `'self'` only (no

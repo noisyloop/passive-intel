@@ -123,6 +123,17 @@ body {
   display: inline-block; padding: 0 6px; border-radius: 3px;
   font-size: 10px; font-weight: 500; border: 0.5px solid; white-space: nowrap;
 }
+/* Severity colors as classes (not inline styles) so the strict CSP
+   `style-src 'self'` keeps blocking inline styles without breaking the badge. */
+.sev-critical { color: var(--bad); border-color: var(--bad); }
+.sev-high { color: var(--high); border-color: var(--high); }
+.sev-medium { color: var(--warn); border-color: var(--warn); }
+.sev-low { color: var(--good); border-color: var(--good); }
+
+/* Spacing utilities that replace former inline style attributes. */
+.kev-line { margin-top: 3px; }
+.list-empty { padding: 8px 0; }
+
 .ransom {
   color: var(--bad); font-size: 10px; border: 0.5px solid var(--bad);
   border-radius: 3px; padding: 0 5px;

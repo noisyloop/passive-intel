@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
-      "source": "/((?!api/(?:kev|urlhaus|feodo|lookup)$|index\\.html$|style\\.css$|app\\.js$).+)",
+      "source": "/((?!api/(?:kev|urlhaus|feodo|lookup|blocklist)$|index\\.html$|style\\.css$|app\\.js$).+)",
       "destination": "/api/notfound"
     }
   ],

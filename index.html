@@ -21,18 +21,33 @@
     </header>
 
     <section class="grid">
-      <div class="panel" aria-labelledby="lookup-head">
-        <h2 id="lookup-head" class="panel-head">passive lookup</h2>
+      <div class="panel" aria-labelledby="feeds-head">
+        <h2 id="feeds-head" class="panel-head">abuse.ch live feeds &middot; active threats</h2>
+
         <div class="row">
-          <span class="ps">target&gt;</span>
-          <input id="t-input" class="cli" type="text" inputmode="url"
-                 placeholder="domain / url / ip" spellcheck="false"
-                 autocomplete="off" aria-label="lookup target" maxlength="253" />
-          <button id="t-btn" class="btn" type="button">run</button>
+          <span class="ps">quad9&gt;</span>
+          <input id="q-input" class="cli" type="text" inputmode="url"
+                 placeholder="domain / ip &mdash; dns block check" spellcheck="false"
+                 autocomplete="off" aria-label="quad9 quick check" maxlength="253" />
+          <button id="q-btn" class="btn" type="button">check</button>
         </div>
-        <div id="t-out" class="out">
-          <span class="note">// quad9 dns block status + urlhaus malware intel &middot; passive only</span>
+        <div id="q-out" class="out">
+          <span class="note">// quad9 filtered dns &middot; nxdomain = on a threat blocklist</span>
         </div>
+
+        <h3 class="sub">&mdash;&mdash; urlhaus &middot; live malware urls &mdash;&mdash;</h3>
+        <div class="row">
+          <span class="ps">filter&gt;</span>
+          <input id="u-filter" class="cli" type="text"
+                 placeholder="host / threat / tag" spellcheck="false"
+                 autocomplete="off" aria-label="filter urlhaus" maxlength="64" />
+        </div>
+        <div id="urlhaus-status" class="note"></div>
+        <div id="urlhaus-list" class="feed-list"></div>
+
+        <h3 class="sub">&mdash;&mdash; feodo &middot; botnet c2 &mdash;&mdash;</h3>
+        <div id="feodo-status" class="note"></div>
+        <div id="feodo-list" class="feed-list"></div>
       </div>
 
       <div class="panel" aria-labelledby="kev-head">
@@ -49,7 +64,7 @@
     </section>
 
     <footer class="foot">
-      <span>sources: cisa kev &middot; quad9 &middot; urlhaus &middot; nvd</span>
+      <span>sources: cisa kev &middot; urlhaus &middot; feodo tracker &middot; quad9 &middot; nvd</span>
       <span>all public, no auth &middot; <a href="https://github.com/noisyloop" rel="noopener">source</a></span>
     </footer>
   </main>

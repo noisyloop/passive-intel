@@ -153,77 +153,155 @@ async function loadKev() {
   }
 }
 
-// ---- Passive lookup ---------------------------------------------------------
+// ---- URLhaus online feed ----------------------------------------------------
+// Live malware URLs actively serving, newest first, filterable by host/threat/tag.
+let urlhausData = [];
+
+function renderUrlhaus() {
+  const status = $('urlhaus-status');
+  const list = $('urlhaus-list');
+
+  if (!urlhausData.length) {
+    status.innerHTML = '<span class="muted">// loading live feed from /api/urlhaus…</span>';
+    list.innerHTML = '';
+    return;
+  }
+
+  const q = $('u-filter').value.trim().toLowerCase();
+  let items = urlhausData;
+  if (q) {
+    items = urlhausData.filter(
+      (u) =>
+        (u.host || '').toLowerCase().includes(q) ||
+        (u.threat || '').toLowerCase().includes(q) ||
+        (u.tags || []).some((t) => t.toLowerCase().includes(q))
+    );
+  }
+
+  status.innerHTML = `<span class="muted">// ${items.length} of ${urlhausData.length} online urls · newest first</span>`;
+
+  const shown = items.slice(0, 80);
+  if (!shown.length) {
+    list.innerHTML = '<div class="note" style="padding:8px 0">no matches</div>';
+    return;
+  }
+
+  list.innerHTML = shown
+    .map(
+      (u) => `<div class="feed-item">
+        <div class="feed-top">
+          <span class="feed-host">${esc(u.host || '—')}</span>
+          ${u.threat ? `<span class="chip warn">${esc(u.threat)}</span>` : ''}
+        </div>
+        <div class="feed-url">${esc(u.url)}</div>
+        <div class="feed-meta">added ${esc(u.dateAdded)}${
+          u.tags && u.tags.length
+            ? ' · ' + u.tags.slice(0, 8).map((t) => esc(t)).join(', ')
+            : ''
+        }</div>
+      </div>`
+    )
+    .join('');
+}
+
+async function loadUrlhaus() {
+  try {
+    const r = await fetch('/api/urlhaus');
+    if (!r.ok) throw new Error(String(r.status));
+    const j = await r.json();
+    urlhausData = Array.isArray(j.urls) ? j.urls : [];
+    renderUrlhaus();
+  } catch (e) {
+    $('urlhaus-status').innerHTML = '<span class="err">// urlhaus feed unavailable</span>';
+  }
+}
+
+// ---- Feodo C2 feed ----------------------------------------------------------
+// Active botnet command-and-control IPs with malware family and country.
+let feodoData = [];
+
+function renderFeodo() {
+  const status = $('feodo-status');
+  const list = $('feodo-list');
+
+  if (!feodoData.length) {
+    status.innerHTML = '<span class="muted">// loading live feed from /api/feodo…</span>';
+    list.innerHTML = '';
+    return;
+  }
+
+  status.innerHTML = `<span class="muted">// ${feodoData.length} active c2 servers · newest first</span>`;
+
+  list.innerHTML = feodoData
+    .slice(0, 80)
+    .map(
+      (c) => `<div class="feed-item">
+        <div class="feed-top">
+          <span class="feed-host">${esc(c.ip)}${c.port != null ? ':' + esc(c.port) : ''}</span>
+          ${c.malware ? `<span class="chip bad-chip">${esc(c.malware)}</span>` : ''}
+          ${c.country ? `<span class="chip">${esc(c.country)}</span>` : ''}
+        </div>
+        <div class="feed-meta">first seen ${esc(c.firstSeen || '—')}${
+          c.lastSeen ? ' · last online ' + esc(c.lastSeen) : ''
+        }</div>
+      </div>`
+    )
+    .join('');
+}
+
+async function loadFeodo() {
+  try {
+    const r = await fetch('/api/feodo');
+    if (!r.ok) throw new Error(String(r.status));
+    const j = await r.json();
+    feodoData = Array.isArray(j.c2) ? j.c2 : [];
+    renderFeodo();
+  } catch (e) {
+    $('feodo-status').innerHTML = '<span class="err">// feodo feed unavailable</span>';
+  }
+}
+
+// ---- Quad9 quick check ------------------------------------------------------
 function normHost(v) {
   v = v.trim();
   try { if (/^https?:\/\//i.test(v)) return new URL(v).hostname; } catch (e) {}
   return v.replace(/^\/+|\/+$/g, '').split('/')[0];
 }
 
-async function lookup() {
-  const raw = $('t-input').value.trim();
+async function quad9Check() {
+  const raw = $('q-input').value.trim();
   if (!raw) return;
   const host = normHost(raw);
-  const out = $('t-out');
-  const btn = $('t-btn');
-  out.innerHTML = '<span class="muted">[ querying passive feeds… ]</span>';
+  const out = $('q-out');
+  const btn = $('q-btn');
+  out.innerHTML = '<span class="muted">[ querying quad9… ]</span>';
   btn.disabled = true;
 
-  let html = '<div class="sub">── quad9 dns ──────────</div>';
-
-  // Quad9 filtered resolver (port 443). Returns NXDOMAIN for blocklisted hosts.
   try {
-    const r = await fetch(
-      `https://dns.quad9.net/dns-query?name=${encodeURIComponent(host)}&type=A`,
-      { headers: { accept: 'application/dns-json' } }
-    );
-    if (!r.ok) {
-      html += `<div class="err">error: http ${r.status}</div>`;
+    const r = await fetch(`/api/lookup?source=quad9&host=${encodeURIComponent(host)}`);
+    if (r.status === 400) {
+      out.innerHTML = '<div class="err">invalid target — domain or ip only</div>';
+    } else if (r.status === 429) {
+      out.innerHTML = '<div class="warn">rate limited — slow down</div>';
+    } else if (!r.ok) {
+      out.innerHTML = '<div class="err">error: lookup failed</div>';
     } else {
       const j = await r.json();
-      if (j.Status === 3) {
+      let html = '';
+      if (j.blocked) {
         html += `<div><span class="lbl">verdict     </span><span class="bad">BLOCKED / nxdomain</span></div>`;
         html += `<div class="note">// quad9 refuses to resolve — on threat blocklist or nonexistent</div>`;
-      } else if (Array.isArray(j.Answer) && j.Answer.length) {
-        const ips = j.Answer.filter((a) => a.type === 1).map((a) => a.data);
+      } else if (Array.isArray(j.aRecords) && j.aRecords.length) {
         html += `<div><span class="lbl">verdict     </span><span class="good">resolves (not blocked)</span></div>`;
-        if (ips.length) html += `<div><span class="lbl">a records   </span><span>${esc(ips.join(', '))}</span></div>`;
+        html += `<div><span class="lbl">a records   </span><span>${esc(j.aRecords.join(', '))}</span></div>`;
       } else {
         html += `<div><span class="lbl">verdict     </span><span class="warn">no a record</span></div>`;
       }
+      out.innerHTML = html;
     }
   } catch (e) {
-    html += `<div class="err">error: quad9 unreachable</div>`;
+    out.innerHTML = '<div class="err">error: quad9 unreachable</div>';
   }
-
-  html += '<div class="sub">── urlhaus ──────────</div>';
-  try {
-    const r = await fetch(`/api/lookup?source=urlhaus&host=${encodeURIComponent(host)}`);
-    if (r.status === 400) {
-      html += `<div class="err">invalid target — domain or ip only</div>`;
-    } else if (r.status === 429) {
-      html += `<div class="warn">rate limited — slow down</div>`;
-    } else if (!r.ok) {
-      html += `<div class="err">error: lookup failed</div>`;
-    } else {
-      const j = await r.json();
-      if (j.status === 'clean') {
-        html += `<div><span class="lbl">malware     </span><span class="good">none on record</span></div>`;
-      } else {
-        html += `<div><span class="lbl">malware urls</span><span class="bad">${j.urls} on record</span></div>`;
-        html += `<div><span class="lbl">active      </span><span class="${j.active ? 'bad' : 'warn'}">${j.active}</span></div>`;
-        if (j.tags && j.tags.length) {
-          html += '<div style="margin-top:4px"><span class="lbl">tags        </span>';
-          j.tags.forEach((t) => (html += `<span class="chip warn">${esc(t)}</span>`));
-          html += '</div>';
-        }
-      }
-    }
-  } catch (e) {
-    html += `<div class="err">error: lookup failed</div>`;
-  }
-
-  out.innerHTML = html;
   btn.disabled = false;
 }
 
@@ -233,8 +311,16 @@ function init() {
   renderKev();
   loadKev();
   $('k-filter').addEventListener('input', renderKev);
-  $('t-btn').addEventListener('click', lookup);
-  $('t-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') lookup(); });
+
+  renderUrlhaus();
+  loadUrlhaus();
+  $('u-filter').addEventListener('input', renderUrlhaus);
+
+  renderFeodo();
+  loadFeodo();
+
+  $('q-btn').addEventListener('click', quad9Check);
+  $('q-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') quad9Check(); });
 }
 
 if (document.readyState === 'loading') {

@@ -13,35 +13,42 @@ resolver. If you want offensive tooling, this isn't it — and that's the point.
 - **CISA KEV panel** — the Known Exploited Vulnerabilities catalog, newest
   first, filterable by vendor / product / CVE, severity-colored, ransomware-use
   flagged. Click any entry to expand its description and pull a CVSS base score.
-- **Passive lookup** — enter a domain, URL, or IP:
-  - **Quad9** filtered DNS resolver — is the host on a threat blocklist? (NXDOMAIN = blocked)
-  - **URLhaus** — is the host serving known malware, and is it currently active?
+- **URLhaus online feed** — live malware URLs actively serving right now, newest
+  first, filterable by host / threat / tag. Loads on page open.
+- **Feodo C2 feed** — active botnet command-and-control IPs with malware family
+  and country. Loads on page open.
+- **Quad9 quick check** — enter a domain or IP; is the host on a threat
+  blocklist? (NXDOMAIN = blocked.)
 
 ## Data sources
 
 All public, all no-auth, no registration:
 
-| Source   | Use                          | CORS | How it's called        |
-|----------|------------------------------|------|------------------------|
-| CISA KEV | actively exploited CVEs      | yes  | proxied + edge-cached  |
-| Quad9    | DNS block status             | yes  | direct from browser    |
-| URLhaus  | malware URL/host reputation  | no   | server-side proxy      |
-| NVD      | CVSS base scores             | no   | server-side proxy      |
+| Source        | Use                              | CORS | How it's called        |
+|---------------|----------------------------------|------|------------------------|
+| CISA KEV      | actively exploited CVEs          | yes  | proxied + edge-cached  |
+| URLhaus       | live malware URLs (online feed)  | no   | server-side proxy      |
+| Feodo Tracker | active botnet C2 IPs             | no   | server-side proxy      |
+| Quad9         | DNS block status                 | yes  | server-side proxy      |
+| NVD           | CVSS base scores                 | no   | server-side proxy      |
 
-URLhaus and NVD send no CORS headers, so they're relayed through
-`/api/lookup`. Quad9 and CISA KEV are CORS-friendly; KEV is still proxied so the
-payload can be slimmed and cached.
+Everything is relayed server-side. URLhaus, Feodo, and NVD send no CORS headers;
+Quad9 and CISA KEV are CORS-friendly but are still proxied so the payload can be
+slimmed and cached — and so the browser CSP can keep `connect-src` to `'self'`
+only.
 
 ## Architecture
 
 ```
 index.html ── static page (no inline JS/CSS, strict CSP)
 style.css
-app.js     ── feed render, filter, CVSS enrichment, passive lookup
+app.js     ── feed render/filter, CVSS enrichment, quad9 quick check
 api/
-  kev.js    ── GET /api/kev            slimmed + edge-cached KEV feed
-  lookup.js ── GET /api/lookup?source= urlhaus | cvss
-  _lib.js   ── validation, rate limiting, timeouts, response helpers
+  kev.js     ── GET /api/kev             slimmed + edge-cached KEV feed
+  urlhaus.js ── GET /api/urlhaus         parsed online malware-URL feed
+  feodo.js   ── GET /api/feodo           slimmed active botnet C2 list
+  lookup.js  ── GET /api/lookup?source=  quad9 | cvss
+  _lib.js    ── validation, rate limiting, timeouts, response helpers
 vercel.json ── security headers + CSP
 ```
 
@@ -60,7 +67,8 @@ No database. No auth. The only server code is two stateless relay functions.
 - **Same-origin only.** No `Access-Control-Allow-Origin` is set, so the API
   can't be reused as an open CORS proxy by anyone else.
 - **Strict CSP.** `default-src 'none'`; scripts/styles are `'self'` only (no
-  inline), `connect-src` limited to self + Quad9. Plus HSTS, `nosniff`,
+  inline), `connect-src 'self'` only (every upstream is proxied server-side, so
+  the browser never talks to a third-party origin). Plus HSTS, `nosniff`,
   `frame-ancestors 'none'`, no-referrer.
 - **Upstream timeouts** so a slow feed can't hang a function.
 

@@ -7,7 +7,7 @@
 //   - s-maxage=3600              -> Vercel's CDN serves a cached copy for 1h
 //   - stale-while-revalidate=7200 -> serve stale up to 2h more while refreshing
 
-const { send, fetchWithTimeout } = require('./_lib');
+const { send, guard, fetchWithTimeout } = require('./_lib');
 
 const FEODO_URL = 'https://feodotracker.abuse.ch/downloads/ipblocklist.json';
 
@@ -15,9 +15,7 @@ const S_MAXAGE = 3600; // 1h
 const SWR = 7200; // 2h
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'GET') {
-    return send(res, 405, { error: 'method_not_allowed' });
-  }
+  if (!guard(req, res)) return;
 
   try {
     const upstream = await fetchWithTimeout(FEODO_URL, {

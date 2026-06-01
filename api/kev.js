@@ -11,7 +11,7 @@
 //
 // To change the refresh cadence, edit S_MAXAGE below (in seconds).
 
-const { send, fetchWithTimeout } = require('./_lib');
+const { send, guard, fetchWithTimeout } = require('./_lib');
 
 const KEV_URL =
   'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
@@ -20,9 +20,7 @@ const S_MAXAGE = 21600; // 6h
 const SWR = 43200; // 12h
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'GET') {
-    return send(res, 405, { error: 'method_not_allowed' });
-  }
+  if (!guard(req, res)) return;
 
   try {
     const upstream = await fetchWithTimeout(KEV_URL, {

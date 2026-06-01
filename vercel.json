@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/((?!api/(?:kev|urlhaus|feodo|lookup)$|index\\.html$|style\\.css$|app\\.js$).+)",
+      "destination": "/api/notfound"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",

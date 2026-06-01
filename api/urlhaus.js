@@ -8,7 +8,7 @@
 //   - stale-while-revalidate=3600 -> serve stale up to 1h more while refreshing
 //   abuse.ch is hit at most a couple of times per hour regardless of traffic.
 
-const { send, fetchWithTimeout } = require('./_lib');
+const { send, guard, fetchWithTimeout } = require('./_lib');
 
 const URLHAUS_CSV = 'https://urlhaus.abuse.ch/downloads/csv_online/';
 
@@ -53,9 +53,7 @@ function hostFromUrl(u) {
 }
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'GET') {
-    return send(res, 405, { error: 'method_not_allowed' });
-  }
+  if (!guard(req, res)) return;
 
   try {
     const upstream = await fetchWithTimeout(URLHAUS_CSV, {

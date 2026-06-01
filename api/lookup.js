@@ -18,6 +18,7 @@ const {
   validHost,
   validCve,
   send,
+  guard,
   applyRateLimit,
   fetchWithTimeout,
 } = require('./_lib');
@@ -65,7 +66,7 @@ async function cvssLookup(cve) {
 }
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'GET') return send(res, 405, { error: 'method_not_allowed' });
+  if (!guard(req, res)) return;
   if (!applyRateLimit(req, res, RL)) return;
 
   const url = new URL(req.url, 'http://localhost');

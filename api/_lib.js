@@ -86,8 +86,55 @@ function send(res, status, body, cacheControl) {
   res.end(JSON.stringify(body));
 }
 
+// ---- Request guards ---------------------------------------------------------
+// Cheap door checks that run before any handler logic or upstream call. They
+// shrink the attack surface: obvious automated/scanner traffic, oversized
+// bodies, and wrong methods are dropped at the edge of the function so they
+// never reach the relay code or burn an upstream request.
+
+// Automated-client / scanner UA signatures. A missing or empty UA is treated as
+// hostile too — every real browser and our own outbound fetches send one.
+const SCANNER_UA_RE =
+  /(?:curl\/|python-requests\/|Go-http-client\/|nuclei|zgrab|masscan)/i;
+
+function isBlockedUserAgent(ua) {
+  if (typeof ua !== 'string' || ua.trim() === '') return true;
+  return SCANNER_UA_RE.test(ua);
+}
+
+// Standardized method check. Handlers were doing this inline and inconsistently;
+// route everything through here so the 405 (with Allow header) is uniform.
+function validateMethod(req, res, allowed = 'GET') {
+  if (req.method === allowed) return true;
+  res.setHeader('Allow', allowed);
+  send(res, 405, { error: 'method_not_allowed' });
+  return false;
+}
+
+// Single entry guard every handler calls first. Returns true if the request may
+// proceed; on rejection it has already written the response.
+function guard(req, res, { method = 'GET' } = {}) {
+  // 1. Scanner / missing UA -> 403, before any work or upstream call.
+  if (isBlockedUserAgent(req.headers['user-agent'])) {
+    send(res, 403, { error: 'forbidden' });
+    return false;
+  }
+  // 2. Oversized request -> 400. Every endpoint is GET-only and reads no body,
+  //    so anything over 512 bytes is junk or a probe.
+  const len = Number(req.headers['content-length']);
+  if (Number.isFinite(len) && len > 512) {
+    send(res, 400, { error: 'payload_too_large' });
+    return false;
+  }
+  // 3. Wrong method -> 405.
+  return validateMethod(req, res, method);
+}
+
 function applyRateLimit(req, res, { limit, windowMs }) {
-  const rl = rateLimit(clientIp(req), limit, windowMs);
+  // Key on IP + path so each endpoint gets an independent bucket — bursting
+  // /api/lookup can't exhaust the budget for, say, /api/kev.
+  const { pathname } = new URL(req.url, 'http://localhost');
+  const rl = rateLimit(`${clientIp(req)}:${pathname}`, limit, windowMs);
   res.setHeader('X-RateLimit-Limit', String(limit));
   res.setHeader('X-RateLimit-Remaining', String(rl.remaining));
   res.setHeader('X-RateLimit-Reset', String(rl.reset));
@@ -116,6 +163,9 @@ module.exports = {
   rateLimit,
   clientIp,
   send,
+  isBlockedUserAgent,
+  validateMethod,
+  guard,
   applyRateLimit,
   fetchWithTimeout,
 };

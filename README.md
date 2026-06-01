@@ -46,11 +46,12 @@ api/
   urlhaus.js ── GET /api/urlhaus         parsed online malware-URL feed
   feodo.js   ── GET /api/feodo           slimmed active botnet C2 list
   lookup.js  ── GET /api/lookup?source=  quad9 | cvss
-  _lib.js    ── validation, rate limiting, timeouts, response helpers
-vercel.json ── security headers + CSP
+  notfound.js── catch-all 404 for unknown paths
+  _lib.js    ── validation, request guards, rate limiting, timeouts, helpers
+vercel.json ── security headers + CSP + unknown-path catch
 ```
 
-No database. No auth. The only server code is two stateless relay functions.
+No database. No auth. The server code is a handful of stateless relay functions.
 
 ## Security
 
@@ -58,10 +59,11 @@ No database. No auth. The only server code is two stateless relay functions.
   *validated* query/body parameter to a known host — never a fetch target.
 - **Strict input validation.** Hosts must match a domain/IPv4 allowlist (private
   ranges rejected); CVE IDs must match `CVE-\d{4}-\d{4,7}`. Anything else → 400.
-- **Rate limiting.** In-memory token bucket, 30 req/min per IP on `/api/lookup`,
-  returning `429` + `Retry-After`. Best-effort on serverless (per-instance,
-  resets on cold start) — fine for a portfolio deploy. See *Hardening* to make
-  it distributed.
+- **Rate limiting.** Per-IP, per-endpoint token bucket returning `429` +
+  `Retry-After` when a client gets noisy.
+- **Edge filtering.** Obvious automated/scanner traffic and malformed or
+  oversized requests are dropped up front, before any handler logic or upstream
+  call. Unknown paths get a clean `404` rather than the static error page.
 - **No DOM XSS from feed data.** The feeds display attacker-influenced content
   (malware URLs, tags, threat names, C2 IPs). The client never builds markup
   from it — every dynamic value is written via `textContent`/DOM APIs, so it's
@@ -104,16 +106,14 @@ git init && git add . && git commit -m "passive intel console"
 vercel              # or import the repo at vercel.com
 ```
 
-No environment variables required. It works on the free tier.
+No environment variables required.
 
-## Hardening (for production / higher traffic)
+## Scaling notes
 
-- **Distributed rate limiting** — swap the in-memory `buckets` map in
-  `api/_lib.js` for Upstash Redis or Vercel KV. The `rateLimit()` call site
-  stays the same.
-- **NVD API key** — registering a free key lifts NVD's strict anonymous rate
-  limit; add it as an env var and pass it as a header in `cvssLookup()`.
-- **Abuse signals** — log `429`s and repeat offenders; add a simple deny-list.
+For higher traffic, the in-memory rate-limit store in `api/_lib.js` can be
+backed by a shared store (e.g. Upstash Redis or Vercel KV) without changing the
+`rateLimit()` call site, and an NVD API key can be supplied as an env var to
+lift NVD's anonymous request limit.
 
 ## Roadmap
 

@@ -24,22 +24,6 @@ All public, all no-auth, no registration:
 
 All upstream calls are made server-side. The browser only ever talks to this app.
 
-## Local dev
-
-```bash
-npm i -g vercel
-vercel dev
-```
-
-## Deploy
-
-```bash
-git init && git add . && git commit -m "passive intel console"
-vercel
-```
-
-No environment variables required.
-
 ## Roadmap
 
 - Cross-resolver consensus to separate blocked from nonexistent.

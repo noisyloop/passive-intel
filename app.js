@@ -17,30 +17,51 @@ const SEED = [
 ];
 
 const $ = (id) => document.getElementById(id);
-const esc = (s) =>
-  String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-const SEV_COLOR = {
-  critical: 'var(--bad)',
-  high: 'var(--high)',
-  medium: 'var(--warn)',
-  low: 'var(--good)',
-};
+// ---- Safe DOM construction --------------------------------------------------
+// Everything the feeds display (malware URLs, tags, threat names, IPs, country
+// codes) is attacker-influenced data from third-party blocklists. We NEVER build
+// markup from it. Every dynamic value goes in through `textContent`, so it is
+// always treated as inert text and can't be parsed as HTML — no XSS surface,
+// regardless of what a poisoned feed contains. The strict CSP (script-src 'self',
+// no inline) is the second layer; this is the first.
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
 
+// Replace a status line with a single classed span of plain text.
+function setNote(node, className, text) {
+  node.replaceChildren(el('span', className, text));
+}
+
+// Severity tiers. Colors live in style.css as `.sev-<tier>` classes (not inline)
+// so the strict CSP `style-src 'self'` keeps blocking inline styles.
+const SEV_TIERS = ['critical', 'high', 'medium', 'low'];
+
+function tierFromScore(score) {
+  if (score >= 9) return 'critical';
+  if (score >= 7) return 'high';
+  if (score >= 4) return 'medium';
+  return 'low';
+}
+
+// Returns a badge element, or null when there's no score and no recognized
+// severity word (render nothing).
 function sevBadge(score, sev) {
-  let label, color;
+  let tier, label;
   if (typeof score === 'number') {
-    if (score >= 9) [label, color] = ['critical ' + score.toFixed(1), SEV_COLOR.critical];
-    else if (score >= 7) [label, color] = ['high ' + score.toFixed(1), SEV_COLOR.high];
-    else if (score >= 4) [label, color] = ['medium ' + score.toFixed(1), SEV_COLOR.medium];
-    else [label, color] = ['low ' + score.toFixed(1), SEV_COLOR.good];
-  } else if (sev && SEV_COLOR[sev]) {
-    [label, color] = [sev, SEV_COLOR[sev]];
+    tier = tierFromScore(score);
+    label = tier + ' ' + score.toFixed(1);
+  } else if (SEV_TIERS.includes(sev)) {
+    tier = sev;
+    label = sev;
   } else {
-    // No score and no severity word: render nothing rather than an "unscored" tag.
-    return '';
+    return null;
   }
-  return `<span class="sev" style="color:${color};border-color:${color}">${label}</span>`;
+  return el('span', 'sev sev-' + tier, label);
 }
 
 // ---- KEV feed ---------------------------------------------------------------
@@ -49,9 +70,9 @@ let live = false;
 const cvssCache = {};
 
 function setStatus() {
-  $('kev-status').innerHTML = live
-    ? `<span class="muted">// ${kevData.length} entries · live cisa feed · newest first · click to expand</span>`
-    : `<span class="muted">// ${kevData.length} entries · cached snapshot · live feed loads from /api/kev</span>`;
+  setNote($('kev-status'), 'muted', live
+    ? `// ${kevData.length} entries · live cisa feed · newest first · click to expand`
+    : `// ${kevData.length} entries · cached snapshot · live feed loads from /api/kev`);
 }
 
 function renderKev() {
@@ -69,57 +90,61 @@ function renderKev() {
 
   const list = $('kev-list');
   if (!items.length) {
-    list.innerHTML = '<div class="note" style="padding:8px 0">no matches</div>';
+    list.replaceChildren(el('div', 'note list-empty', 'no matches'));
     return;
   }
 
-  list.innerHTML = items
-    .map(
-      (v, i) => `<div class="kev-item" data-idx="${i}" tabindex="0" role="button" aria-expanded="false">
-        <div class="kev-top">
-          <span class="kev-cve">${esc(v.cveID)}</span>
-          ${sevBadge(v.score, v.sev)}
-          ${v.ransomware ? '<span class="ransom">ransomware</span>' : ''}
-        </div>
-        <div class="kev-meta">${esc(v.vendorProject)} · ${esc(v.product)} · added ${esc(v.dateAdded)}</div>
-        <div class="kev-detail" id="d-${i}"></div>
-      </div>`
-    )
-    .join('');
+  const frag = document.createDocumentFragment();
+  for (const v of items) {
+    const item = el('div', 'kev-item');
+    item.tabIndex = 0;
+    item.setAttribute('role', 'button');
+    item.setAttribute('aria-expanded', 'false');
 
-  list.querySelectorAll('.kev-item').forEach((el) => {
-    const idx = Number(el.dataset.idx);
-    const toggle = () => expandKev(el, items[idx]);
-    el.addEventListener('click', toggle);
-    el.addEventListener('keydown', (e) => {
+    const top = el('div', 'kev-top');
+    top.appendChild(el('span', 'kev-cve', v.cveID));
+    const badge = sevBadge(v.score, v.sev);
+    if (badge) top.appendChild(badge);
+    if (v.ransomware) top.appendChild(el('span', 'ransom', 'ransomware'));
+    item.appendChild(top);
+
+    item.appendChild(
+      el('div', 'kev-meta', `${v.vendorProject} · ${v.product} · added ${v.dateAdded}`)
+    );
+
+    const detail = el('div', 'kev-detail');
+    item.appendChild(detail);
+
+    const toggle = () => expandKev(item, v, detail);
+    item.addEventListener('click', toggle);
+    item.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
     });
-  });
+    frag.appendChild(item);
+  }
+  list.replaceChildren(frag);
 }
 
-async function expandKev(el, v) {
-  const d = el.querySelector('.kev-detail');
+async function expandKev(item, v, d) {
   if (d.classList.contains('open')) {
     d.classList.remove('open');
-    el.setAttribute('aria-expanded', 'false');
+    item.setAttribute('aria-expanded', 'false');
     return;
   }
   d.classList.add('open');
-  el.setAttribute('aria-expanded', 'true');
+  item.setAttribute('aria-expanded', 'true');
 
-  let base = `<div>${esc(v.desc || v.name || 'no description')}</div>`;
-  if (v.dueDate) base += `<div class="lbl" style="margin-top:3px">due: ${esc(v.dueDate)}</div>`;
+  d.replaceChildren(el('div', null, v.desc || v.name || 'no description'));
+  if (v.dueDate) d.appendChild(el('div', 'lbl kev-line', 'due: ' + v.dueDate));
 
   // If the snapshot already carries a severity word, show it without hitting NVD.
-  if (typeof v.score === 'number' || v.sev) {
-    d.innerHTML = base;
-    return;
-  }
+  if (typeof v.score === 'number' || v.sev) return;
 
-  d.innerHTML = base + '<div class="muted" style="margin-top:3px">fetching cvss…</div>';
+  const slot = el('div', 'muted kev-line', 'fetching cvss…');
+  d.appendChild(slot);
 
   if (v.cveID in cvssCache) {
-    showCvss(d, base, cvssCache[v.cveID]);
+    showCvss(slot, cvssCache[v.cveID]);
     return;
   }
   try {
@@ -127,18 +152,23 @@ async function expandKev(el, v) {
     if (!r.ok) throw new Error(String(r.status));
     const j = await r.json();
     cvssCache[v.cveID] = j.score;
-    showCvss(d, base, j.score);
+    // The fetch may resolve after the user collapsed the row; don't write
+    // stale content into a closed detail panel.
+    if (!d.classList.contains('open')) return;
+    showCvss(slot, j.score);
   } catch (e) {
-    d.innerHTML = base + '<div class="err" style="margin-top:3px">cvss unavailable</div>';
+    slot.className = 'err kev-line';
+    slot.textContent = 'cvss unavailable';
   }
 }
 
-function showCvss(d, base, score) {
-  const badge = typeof score === 'number'
-    ? sevBadge(score, null)
-    : '<span class="muted">n/a</span>';
-  d.innerHTML =
-    base + `<div style="margin-top:4px"><span class="lbl">cvss: </span>${badge}</div>`;
+function showCvss(slot, score) {
+  const wrap = el('div', 'kev-line');
+  wrap.appendChild(el('span', 'lbl', 'cvss: '));
+  wrap.appendChild(
+    typeof score === 'number' ? sevBadge(score, null) : el('span', 'muted', 'n/a')
+  );
+  slot.replaceWith(wrap);
 }
 
 async function loadKev() {
@@ -166,8 +196,8 @@ function renderUrlhaus() {
   const list = $('urlhaus-list');
 
   if (!urlhausData.length) {
-    status.innerHTML = '<span class="muted">// loading live feed from /api/urlhaus…</span>';
-    list.innerHTML = '';
+    setNote(status, 'muted', '// loading live feed from /api/urlhaus…');
+    list.replaceChildren();
     return;
   }
 
@@ -182,30 +212,34 @@ function renderUrlhaus() {
     );
   }
 
-  status.innerHTML = `<span class="muted">// ${items.length} of ${urlhausData.length} online urls · newest first</span>`;
+  setNote(status, 'muted', `// ${items.length} of ${urlhausData.length} online urls · newest first`);
 
   const shown = items.slice(0, 80);
   if (!shown.length) {
-    list.innerHTML = '<div class="note" style="padding:8px 0">no matches</div>';
+    list.replaceChildren(el('div', 'note list-empty', 'no matches'));
     return;
   }
 
-  list.innerHTML = shown
-    .map(
-      (u) => `<div class="feed-item">
-        <div class="feed-top">
-          <span class="feed-host">${esc(u.host || '—')}</span>
-          ${u.threat ? `<span class="chip warn">${esc(u.threat)}</span>` : ''}
-        </div>
-        <div class="feed-url">${esc(u.url)}</div>
-        <div class="feed-meta">added ${esc(u.dateAdded)}${
-          u.tags && u.tags.length
-            ? ' · ' + u.tags.slice(0, 8).map((t) => esc(t)).join(', ')
-            : ''
-        }</div>
-      </div>`
-    )
-    .join('');
+  const frag = document.createDocumentFragment();
+  for (const u of shown) {
+    const item = el('div', 'feed-item');
+
+    const top = el('div', 'feed-top');
+    top.appendChild(el('span', 'feed-host', u.host || '—'));
+    if (u.threat) top.appendChild(el('span', 'chip warn', u.threat));
+    item.appendChild(top);
+
+    // The live malware URL is rendered as inert TEXT, never as a clickable
+    // <a href> — there is deliberately no way to navigate to it from here.
+    item.appendChild(el('div', 'feed-url', u.url));
+
+    let meta = `added ${u.dateAdded}`;
+    if (u.tags && u.tags.length) meta += ' · ' + u.tags.slice(0, 8).join(', ');
+    item.appendChild(el('div', 'feed-meta', meta));
+
+    frag.appendChild(item);
+  }
+  list.replaceChildren(frag);
 }
 
 async function loadUrlhaus() {
@@ -216,7 +250,7 @@ async function loadUrlhaus() {
     urlhausData = Array.isArray(j.urls) ? j.urls : [];
     renderUrlhaus();
   } catch (e) {
-    $('urlhaus-status').innerHTML = '<span class="err">// urlhaus feed unavailable</span>';
+    setNote($('urlhaus-status'), 'err', '// urlhaus feed unavailable');
   }
 }
 
@@ -229,28 +263,30 @@ function renderFeodo() {
   const list = $('feodo-list');
 
   if (!feodoData.length) {
-    status.innerHTML = '<span class="muted">// loading live feed from /api/feodo…</span>';
-    list.innerHTML = '';
+    setNote(status, 'muted', '// loading live feed from /api/feodo…');
+    list.replaceChildren();
     return;
   }
 
-  status.innerHTML = `<span class="muted">// ${feodoData.length} active c2 servers · newest first</span>`;
+  setNote(status, 'muted', `// ${feodoData.length} active c2 servers · newest first`);
 
-  list.innerHTML = feodoData
-    .slice(0, 80)
-    .map(
-      (c) => `<div class="feed-item">
-        <div class="feed-top">
-          <span class="feed-host">${esc(c.ip)}${c.port != null ? ':' + esc(c.port) : ''}</span>
-          ${c.malware ? `<span class="chip bad-chip">${esc(c.malware)}</span>` : ''}
-          ${c.country ? `<span class="chip">${esc(c.country)}</span>` : ''}
-        </div>
-        <div class="feed-meta">first seen ${esc(c.firstSeen || '—')}${
-          c.lastSeen ? ' · last online ' + esc(c.lastSeen) : ''
-        }</div>
-      </div>`
-    )
-    .join('');
+  const frag = document.createDocumentFragment();
+  for (const c of feodoData.slice(0, 80)) {
+    const item = el('div', 'feed-item');
+
+    const top = el('div', 'feed-top');
+    top.appendChild(el('span', 'feed-host', c.ip + (c.port != null ? ':' + c.port : '')));
+    if (c.malware) top.appendChild(el('span', 'chip bad-chip', c.malware));
+    if (c.country) top.appendChild(el('span', 'chip', c.country));
+    item.appendChild(top);
+
+    let meta = `first seen ${c.firstSeen || '—'}`;
+    if (c.lastSeen) meta += ' · last online ' + c.lastSeen;
+    item.appendChild(el('div', 'feed-meta', meta));
+
+    frag.appendChild(item);
+  }
+  list.replaceChildren(frag);
 }
 
 async function loadFeodo() {
@@ -261,7 +297,7 @@ async function loadFeodo() {
     feodoData = Array.isArray(j.c2) ? j.c2 : [];
     renderFeodo();
   } catch (e) {
-    $('feodo-status').innerHTML = '<span class="err">// feodo feed unavailable</span>';
+    setNote($('feodo-status'), 'err', '// feodo feed unavailable');
   }
 }
 

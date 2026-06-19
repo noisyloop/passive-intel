@@ -70,8 +70,20 @@ function rateLimit(key, limit, windowMs) {
 }
 
 function clientIp(req) {
+  // Prefer Vercel's `x-real-ip`: the platform sets it to the true connecting
+  // client and a client-supplied value is overwritten, so it can't be spoofed.
+  const real = req.headers['x-real-ip'];
+  if (typeof real === 'string' && real.trim()) return real.trim();
+
+  // Fallback: the RIGHTMOST entry of X-Forwarded-For is the address appended by
+  // the closest trusted proxy. A client can prepend junk on the left to dodge
+  // the rate limiter, but it can't forge what the proxy stamps on the right.
   const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.length) return xff.split(',')[0].trim();
+  if (typeof xff === 'string' && xff.length) {
+    const parts = xff.split(',').map((s) => s.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+
   return req.socket?.remoteAddress || 'unknown';
 }
 

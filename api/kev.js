@@ -11,7 +11,7 @@
 //
 // To change the refresh cadence, edit S_MAXAGE below (in seconds).
 
-const { send, guard, fetchWithTimeout } = require('./_lib');
+const { send, guard, fetchWithTimeout, str } = require('./_lib');
 
 const KEV_URL =
   'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
@@ -32,18 +32,22 @@ module.exports = async function handler(req, res) {
     }
 
     const data = await upstream.json();
-    const list = Array.isArray(data.vulnerabilities) ? data.vulnerabilities : [];
+    if (!data || !Array.isArray(data.vulnerabilities)) {
+      return send(res, 502, { error: 'upstream_error', message: 'unexpected feed format' });
+    }
 
-    // Slim + sort newest first. Drop fields the UI never reads.
-    const slim = list
+    // Slim + sort newest first. Drop fields the UI never reads. Every field is
+    // coerced to a bounded string so the client only ever gets plain text.
+    const slim = data.vulnerabilities
+      .filter((v) => v && typeof v === 'object')
       .map((v) => ({
-        cveID: v.cveID,
-        vendorProject: v.vendorProject,
-        product: v.product,
-        name: v.vulnerabilityName,
-        dateAdded: v.dateAdded,
-        dueDate: v.dueDate,
-        desc: v.shortDescription,
+        cveID: str(v.cveID, 32),
+        vendorProject: str(v.vendorProject, 256),
+        product: str(v.product, 256),
+        name: str(v.vulnerabilityName, 512),
+        dateAdded: str(v.dateAdded, 32),
+        dueDate: str(v.dueDate, 32),
+        desc: str(v.shortDescription, 4000),
         ransomware: v.knownRansomwareCampaignUse === 'Known',
       }))
       .sort((a, b) => String(b.dateAdded).localeCompare(String(a.dateAdded)));
@@ -54,8 +58,8 @@ module.exports = async function handler(req, res) {
       {
         source: 'cisa-kev',
         count: slim.length,
-        catalogVersion: data.catalogVersion || null,
-        dateReleased: data.dateReleased || null,
+        catalogVersion: str(data.catalogVersion, 64),
+        dateReleased: str(data.dateReleased, 64),
         vulnerabilities: slim,
       },
       `public, s-maxage=${S_MAXAGE}, stale-while-revalidate=${SWR}`

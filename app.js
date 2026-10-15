@@ -67,7 +67,7 @@ function sevBadge(score, sev) {
 // ---- KEV feed ---------------------------------------------------------------
 let kevData = SEED.slice();
 let live = false;
-const cvssCache = {};
+const cvssCache = new Map(); // Map, not {}: feed-supplied keys like "__proto__" are inert
 
 function setStatus() {
   setNote($('kev-status'), 'muted', live
@@ -143,15 +143,15 @@ async function expandKev(item, v, d) {
   const slot = el('div', 'muted kev-line', 'fetching cvss…');
   d.appendChild(slot);
 
-  if (v.cveID in cvssCache) {
-    showCvss(slot, cvssCache[v.cveID]);
+  if (cvssCache.has(v.cveID)) {
+    showCvss(slot, cvssCache.get(v.cveID));
     return;
   }
   try {
     const r = await fetch(`/api/lookup?source=cvss&cve=${encodeURIComponent(v.cveID)}`);
     if (!r.ok) throw new Error(String(r.status));
     const j = await r.json();
-    cvssCache[v.cveID] = j.score;
+    cvssCache.set(v.cveID, j.score);
     // The fetch may resolve after the user collapsed the row; don't write
     // stale content into a closed detail panel.
     if (!d.classList.contains('open')) return;

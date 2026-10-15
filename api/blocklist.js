@@ -8,7 +8,7 @@
 //   - s-maxage=3600              -> Vercel's CDN serves a cached copy for 1h
 //   - stale-while-revalidate=7200 -> serve stale up to 2h more while refreshing
 
-const { guard, fetchWithTimeout } = require('./_lib');
+const { guard, fetchWithTimeout, validPublicIpv4 } = require('./_lib');
 
 const FEODO_URL = 'https://feodotracker.abuse.ch/downloads/ipblocklist.json';
 
@@ -31,11 +31,21 @@ module.exports = async function handler(req, res) {
     }
 
     const data = await upstream.json();
-    const list = Array.isArray(data) ? data : [];
+    if (!Array.isArray(data)) {
+      // Unexpected shape: fail loudly rather than cache (and serve to firewall
+      // ingest) an empty list that would silently drop every block.
+      res.statusCode = 502;
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.end();
+    }
 
-    const text = list
-      .map((c) => c.ip_address)
-      .filter((ip) => typeof ip === 'string' && ip.length > 0)
+    // Only well-formed public IPv4 addresses make it out. This output is meant
+    // to be piped straight into firewall rules, so a poisoned or malformed
+    // upstream entry (embedded newline, CIDR like 0.0.0.0/0, a private range)
+    // must never be passed through.
+    const text = data
+      .map((c) => (c && typeof c === 'object' ? c.ip_address : null))
+      .filter(validPublicIpv4)
       .join('\n');
 
     res.statusCode = 200;

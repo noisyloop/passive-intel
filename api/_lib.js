@@ -9,16 +9,28 @@ const IPV4_RE =
   /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
 const CVE_RE = /^CVE-\d{4}-\d{4,7}$/i;
 
-// RFC1918 / loopback / link-local — reject so the tool isn't pointed at internal space.
+// Non-public space (RFC1918, loopback, link-local, CGNAT, benchmarking,
+// IETF/test nets, multicast, reserved, broadcast) — reject so the tool isn't
+// pointed at internal or meaningless address space.
 function isPrivateIp(ip) {
   const o = ip.split('.').map(Number);
+  if (o[0] === 0) return true;
   if (o[0] === 10) return true;
+  if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true; // CGNAT
   if (o[0] === 127) return true;
   if (o[0] === 169 && o[1] === 254) return true;
   if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
+  if (o[0] === 192 && o[1] === 0 && (o[2] === 0 || o[2] === 2)) return true;
   if (o[0] === 192 && o[1] === 168) return true;
-  if (o[0] === 0) return true;
+  if (o[0] === 198 && (o[1] === 18 || o[1] === 19)) return true; // benchmarking
+  if (o[0] === 198 && o[1] === 51 && o[2] === 100) return true; // TEST-NET-2
+  if (o[0] === 203 && o[1] === 0 && o[2] === 113) return true; // TEST-NET-3
+  if (o[0] >= 224) return true; // multicast, reserved, broadcast
   return false;
+}
+
+function validPublicIpv4(raw) {
+  return typeof raw === 'string' && IPV4_RE.test(raw) && !isPrivateIp(raw);
 }
 
 function validHost(raw) {
@@ -47,19 +59,27 @@ function validCve(raw) {
 // nothing. For production-grade distributed limits, swap `buckets` for Upstash
 // Redis / Vercel KV (see README) — the call site does not change.
 const buckets = new Map();
+const MAX_BUCKETS = 5000;
 
 function rateLimit(key, limit, windowMs) {
   const now = Date.now();
   let b = buckets.get(key);
   if (!b || now > b.reset) {
+    if (b) buckets.delete(key); // re-insert so Map order stays oldest-first
     b = { count: 0, reset: now + windowMs };
     buckets.set(key, b);
   }
   b.count += 1;
 
-  // Opportunistic cleanup so the map can't grow unbounded.
-  if (buckets.size > 5000) {
+  // Keep the map bounded. Expired entries go first; if a flood of distinct
+  // keys keeps it full of live entries, evict the oldest (Map iterates in
+  // insertion order) so memory can't grow without limit.
+  if (buckets.size > MAX_BUCKETS) {
     for (const [k, v] of buckets) if (now > v.reset) buckets.delete(k);
+    for (const k of buckets.keys()) {
+      if (buckets.size <= MAX_BUCKETS) break;
+      buckets.delete(k);
+    }
   }
 
   return {
@@ -85,6 +105,24 @@ function clientIp(req) {
   }
 
   return req.socket?.remoteAddress || 'unknown';
+}
+
+// Rate-limit key for a client address. A single IPv6 subscriber is typically
+// handed a whole /64, so keying on the full address would let one client
+// rotate through 2^64 addresses and never hit the limit. Bucket IPv6 by /64.
+function rateLimitKey(ip) {
+  if (typeof ip !== 'string' || !ip.includes(':')) return ip;
+  if (ip.startsWith('::ffff:') && ip.includes('.')) return ip.slice(7); // v4-mapped
+  const [head, tail = ''] = ip.split('%')[0].split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const groups = ip.includes('::')
+    ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t]
+    : h;
+  return groups
+    .slice(0, 4)
+    .map((g) => (parseInt(g, 16) || 0).toString(16))
+    .join(':') + '::/64';
 }
 
 // ---- Response helpers -------------------------------------------------------
@@ -125,28 +163,41 @@ function validateMethod(req, res, allowed = 'GET') {
 
 // Single entry guard every handler calls first. Returns true if the request may
 // proceed; on rejection it has already written the response.
-function guard(req, res, { method = 'GET' } = {}) {
+function guard(req, res, { method = 'GET', query = [] } = {}) {
   // 1. Scanner / missing UA -> 403, before any work or upstream call.
   if (isBlockedUserAgent(req.headers['user-agent'])) {
     send(res, 403, { error: 'forbidden' });
     return false;
   }
   // 2. Oversized request -> 400. Every endpoint is GET-only and reads no body,
-  //    so anything over 512 bytes is junk or a probe.
+  //    so anything over 512 bytes is junk or a probe. A chunked body carries no
+  //    Content-Length, so reject Transfer-Encoding outright too.
   const len = Number(req.headers['content-length']);
-  if (Number.isFinite(len) && len > 512) {
+  if ((Number.isFinite(len) && len > 512) || req.headers['transfer-encoding']) {
     send(res, 400, { error: 'payload_too_large' });
     return false;
   }
   // 3. Wrong method -> 405.
-  return validateMethod(req, res, method);
+  if (!validateMethod(req, res, method)) return false;
+  // 4. Unexpected query parameters -> 400. The CDN keys its cache on the full
+  //    URL, so `/api/kev?x=<random>` would miss the cache every time and make
+  //    this function re-fetch the upstream feed on every request — an easy way
+  //    to hammer CISA/abuse.ch from our IP. Only allowlisted params pass.
+  const { searchParams } = new URL(req.url, 'http://localhost');
+  for (const k of searchParams.keys()) {
+    if (!query.includes(k)) {
+      send(res, 400, { error: 'unexpected_query' });
+      return false;
+    }
+  }
+  return true;
 }
 
 function applyRateLimit(req, res, { limit, windowMs }) {
   // Key on IP + path so each endpoint gets an independent bucket — bursting
   // /api/lookup can't exhaust the budget for, say, /api/kev.
   const { pathname } = new URL(req.url, 'http://localhost');
-  const rl = rateLimit(`${clientIp(req)}:${pathname}`, limit, windowMs);
+  const rl = rateLimit(`${rateLimitKey(clientIp(req))}:${pathname}`, limit, windowMs);
   res.setHeader('X-RateLimit-Limit', String(limit));
   res.setHeader('X-RateLimit-Remaining', String(rl.remaining));
   res.setHeader('X-RateLimit-Reset', String(rl.reset));
@@ -158,22 +209,58 @@ function applyRateLimit(req, res, { limit, windowMs }) {
   return true;
 }
 
-// fetch with a hard timeout so a slow upstream can't hang the function.
-async function fetchWithTimeout(url, opts = {}, ms = 8000) {
+// fetch with a hard timeout AND a size cap, both covering the body as well as
+// the headers. The body is buffered inside the timeout window, so an upstream
+// that answers fast but then drips bytes (or streams forever) can't hang the
+// function or exhaust its memory. Returns a fetch-like { ok, status, text(),
+// json() } over the buffered body.
+async function fetchWithTimeout(url, opts = {}, ms = 8000, maxBytes = 25 * 1024 * 1024) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    return await fetch(url, { ...opts, signal: ctrl.signal });
+    const r = await fetch(url, { ...opts, signal: ctrl.signal });
+    const chunks = [];
+    let size = 0;
+    if (r.body) {
+      const reader = r.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) {
+          ctrl.abort();
+          throw new Error('upstream response too large');
+        }
+        chunks.push(value);
+      }
+    }
+    const body = Buffer.concat(chunks).toString('utf8');
+    return {
+      ok: r.ok,
+      status: r.status,
+      text: async () => body,
+      json: async () => JSON.parse(body),
+    };
   } finally {
     clearTimeout(t);
   }
 }
 
+// Coerce an untrusted feed field to a bounded string (or null). Keeps the
+// browser from ever receiving objects/numbers where it expects text.
+function str(v, max = 2000) {
+  if (v == null) return null;
+  return String(v).slice(0, max);
+}
+
 module.exports = {
   validHost,
   validCve,
+  validPublicIpv4,
+  str,
   rateLimit,
   clientIp,
+  rateLimitKey,
   send,
   isBlockedUserAgent,
   validateMethod,

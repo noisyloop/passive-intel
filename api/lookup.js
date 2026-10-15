@@ -66,7 +66,7 @@ async function cvssLookup(cve) {
 }
 
 module.exports = async function handler(req, res) {
-  if (!guard(req, res)) return;
+  if (!guard(req, res, { query: ['source', 'host', 'cve'] })) return;
   if (!applyRateLimit(req, res, RL)) return;
 
   const url = new URL(req.url, 'http://localhost');

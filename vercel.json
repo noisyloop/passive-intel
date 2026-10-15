@@ -1,8 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
+    { "source": "/api/blocklist.txt", "destination": "/api/blocklist" },
     {
-      "source": "/((?!api/(?:kev|urlhaus|feodo|lookup|blocklist)$|index\\.html$|style\\.css$|app\\.js$).+)",
+      "source": "/((?!api/(?:kev|urlhaus|feodo|lookup|blocklist|blocklist\\.txt)$|index\\.html$|style\\.css$|app\\.js$).+)",
       "destination": "/api/notfound"
     }
   ],

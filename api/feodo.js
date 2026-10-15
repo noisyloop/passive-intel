@@ -7,7 +7,7 @@
 //   - s-maxage=3600              -> Vercel's CDN serves a cached copy for 1h
 //   - stale-while-revalidate=7200 -> serve stale up to 2h more while refreshing
 
-const { send, guard, fetchWithTimeout } = require('./_lib');
+const { send, guard, fetchWithTimeout, str } = require('./_lib');
 
 const FEODO_URL = 'https://feodotracker.abuse.ch/downloads/ipblocklist.json';
 
@@ -27,17 +27,21 @@ module.exports = async function handler(req, res) {
     }
 
     const data = await upstream.json();
-    const list = Array.isArray(data) ? data : [];
+    if (!Array.isArray(data)) {
+      return send(res, 502, { error: 'upstream_error', message: 'unexpected feed format' });
+    }
 
-    // Slim to the fields the UI renders, newest C2 first.
-    const slim = list
+    // Slim to the fields the UI renders, newest C2 first. Every field is
+    // coerced to a bounded string so the client only ever gets plain text.
+    const slim = data
+      .filter((c) => c && typeof c === 'object')
       .map((c) => ({
-        ip: c.ip_address,
-        port: c.port,
-        malware: c.malware,
-        firstSeen: c.first_seen,
-        lastSeen: c.last_online,
-        country: c.country,
+        ip: str(c.ip_address, 64),
+        port: Number.isInteger(c.port) ? c.port : null,
+        malware: str(c.malware, 128),
+        firstSeen: str(c.first_seen, 64),
+        lastSeen: str(c.last_online, 64),
+        country: str(c.country, 8),
       }))
       .sort((a, b) => String(b.firstSeen).localeCompare(String(a.firstSeen)));
 

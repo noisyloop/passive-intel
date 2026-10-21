@@ -5,6 +5,6 @@
   "description": "Read-only threat-intel console for defenders and researchers. Public, no-auth feeds. No scanning.",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": "24.x"
   }
 }
